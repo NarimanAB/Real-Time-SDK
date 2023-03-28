@@ -8,17 +8,7 @@
 
 package com.refinitiv.eta.valueadd.examples.provider;
 
-import com.refinitiv.eta.codec.CodecFactory;
-import com.refinitiv.eta.codec.CodecReturnCodes;
-import com.refinitiv.eta.codec.DataStates;
-import com.refinitiv.eta.codec.DataTypes;
-import com.refinitiv.eta.codec.DecodeIterator;
-import com.refinitiv.eta.codec.EncodeIterator;
-import com.refinitiv.eta.codec.Msg;
-import com.refinitiv.eta.codec.MsgClasses;
-import com.refinitiv.eta.codec.State;
-import com.refinitiv.eta.codec.StateCodes;
-import com.refinitiv.eta.codec.StreamStates;
+import com.refinitiv.eta.codec.*;
 import com.refinitiv.eta.rdm.ClassesOfService;
 import com.refinitiv.eta.rdm.DomainTypes;
 import com.refinitiv.eta.rdm.Login;
@@ -27,20 +17,7 @@ import com.refinitiv.eta.valueadd.domainrep.rdm.login.LoginMsgFactory;
 import com.refinitiv.eta.valueadd.domainrep.rdm.login.LoginMsgType;
 import com.refinitiv.eta.valueadd.domainrep.rdm.login.LoginRefresh;
 import com.refinitiv.eta.valueadd.domainrep.rdm.login.LoginRequest;
-import com.refinitiv.eta.valueadd.reactor.ClassOfService;
-import com.refinitiv.eta.valueadd.reactor.ReactorCallbackReturnCodes;
-import com.refinitiv.eta.valueadd.reactor.ReactorErrorInfo;
-import com.refinitiv.eta.valueadd.reactor.ReactorFactory;
-import com.refinitiv.eta.valueadd.reactor.ReactorReturnCodes;
-import com.refinitiv.eta.valueadd.reactor.TunnelStream;
-import com.refinitiv.eta.valueadd.reactor.TunnelStreamAcceptOptions;
-import com.refinitiv.eta.valueadd.reactor.TunnelStreamDefaultMsgCallback;
-import com.refinitiv.eta.valueadd.reactor.TunnelStreamMsgEvent;
-import com.refinitiv.eta.valueadd.reactor.TunnelStreamRejectOptions;
-import com.refinitiv.eta.valueadd.reactor.TunnelStreamRequestEvent;
-import com.refinitiv.eta.valueadd.reactor.TunnelStreamStatusEvent;
-import com.refinitiv.eta.valueadd.reactor.TunnelStreamStatusEventCallback;
-import com.refinitiv.eta.valueadd.reactor.TunnelStreamSubmitOptions;
+import com.refinitiv.eta.valueadd.reactor.*;
 
 /* Handles TunnelStream connections for the VA Provider. */
 class TunnelStreamHandler implements TunnelStreamStatusEventCallback, TunnelStreamDefaultMsgCallback
@@ -149,8 +126,9 @@ class TunnelStreamHandler implements TunnelStreamStatusEventCallback, TunnelStre
         
         // check for login request
         if (event.containerType() == DataTypes.MSG &&
-            event.tunnelStream().classOfService().authentication().type() == ClassesOfService.AuthenticationTypes.OMM_LOGIN &&
-            _msg.domainType() == DomainTypes.LOGIN && _msg.msgClass() == MsgClasses.REQUEST)
+                (event.tunnelStream().classOfService().authentication().type() == ClassesOfService.AuthenticationTypes.OMM_LOGIN
+                        || event.tunnelStream().classOfService().authentication().type() == ClassesOfService.AuthenticationTypes.NOT_REQUIRED
+                ) && _msg.domainType() == DomainTypes.LOGIN && _msg.msgClass() == MsgClasses.REQUEST)
         {
             _loginRequest.clear();
             _loginRequest.rdmMsgType(LoginMsgType.REQUEST);
@@ -256,7 +234,108 @@ class TunnelStreamHandler implements TunnelStreamStatusEventCallback, TunnelStre
                 return ReactorCallbackReturnCodes.SUCCESS;
             }
         }
-        else // not a login or opaque
+        else if (event.containerType() == DataTypes.MSG &&
+                _msg.domainType() == DomainTypes.MARKET_PRICE && _msg.msgClass() == MsgClasses.POST) {
+            //_decodeIter.clear();
+            ReactorErrorInfo errorInfo = ReactorFactory.createReactorErrorInfo();
+            PostMsg postMsg = (PostMsg) _msg;
+            ReactorChannel reactorChannel = event.reactorChannel();
+            if (postMsg.containerType() == DataTypes.MSG) {
+                // Create a ETA Buffer to encode into
+                TransportBuffer buffer = _tunnelStream.getBuffer(8192, event.errorInfo());
+                int majorVersion = Codec.majorVersion();  // This should be initialized to the MAJOR version of RWF being encoded
+                int minorVersion = Codec.minorVersion();  // This should be initialized to the MINOR version of RWF being encoded
+                _encodeIter.clear();
+
+                // Associate buffer and iterator and set proper protocol version information on iterator.
+                if ((ret = _encodeIter.setBufferAndRWFVersion(buffer, majorVersion, minorVersion)) < CodecReturnCodes.SUCCESS)
+                {
+                    System.out.println("Error " + CodecReturnCodes.toString(ret) + "(" +ret + " encountered with setBufferAndRWFVersion. "
+                            + " Error Text: " + CodecReturnCodes.info(ret));
+                    return ReactorCallbackReturnCodes.SUCCESS;
+                }
+
+                // use this to store and check return codes
+                int retVal;
+                boolean success;
+
+                System.out.println("Begin ETA AckMsg Set");
+                com.refinitiv.eta.codec.AckMsg ackMsg = (com.refinitiv.eta.codec.AckMsg)com.refinitiv.eta.codec.CodecFactory.createMsg();
+                ackMsg.msgClass(com.refinitiv.eta.codec.MsgClasses.ACK);
+
+                ackMsg.domainType( com.refinitiv.eta.rdm.DomainTypes.MARKET_PRICE );
+
+                //ackMsg.streamId( 15 );
+                ackMsg.streamId(postMsg.streamId());
+
+                ackMsg.ackId(postMsg.postId());
+
+                //ackMsg.applyHasText();
+                //ackMsg.text().data("denied by source");
+
+                //ackMsg.applyHasSeqNum();
+                //ackMsg.seqNum(postMsg.seqNum());
+
+                //ackMsg.applyHasNakCode();
+                //ackMsg.nakCode(com.refinitiv.eta.codec.NakCodes.DENIED_BY_SRC);
+
+                //ackMsg.applyHasNakCode();
+                //ackMsg.nakCode(com.refinitiv.eta.codec.NakCodes.DENIED_BY_SRC);
+
+                ackMsg.applyHasMsgKey();
+                //ackMsg.msgKey().applyHasName();
+                //ackMsg.msgKey().name().data( "ABCDEF" );
+
+                //ackMsg.msgKey().applyHasNameType();
+                //ackMsg.msgKey().nameType( com.refinitiv.eta.rdm.InstrumentNameTypes.RIC );
+
+                ackMsg.msgKey().applyHasServiceId();
+                ackMsg.msgKey().serviceId(5);
+
+                //ackMsg.msgKey().applyHasFilter();
+                //ackMsg.msgKey().filter( 12 );
+
+                //ackMsg.msgKey().applyHasIdentifier();
+                //ackMsg.msgKey().identifier(21);
+
+                ackMsg.applyHasExtendedHdr();
+
+                //ackMsg.msgKey().applyHasAttrib();
+                //ackMsg.msgKey().attribContainerType( postMsg.containerType() );
+
+                //ackMsg.containerType(postMsg.containerType());
+                ackMsg.containerType(DataTypes.NO_DATA);
+
+                if ((retVal = ackMsg.encodeInit(_encodeIter, 0)) < CodecReturnCodes.SUCCESS)
+                {
+                    System.out.println("Error encoding AckMsg.");
+                    System.out.println("Error " + CodecReturnCodes.toString(retVal) + "(" + retVal
+                            + ") encountered with AckMsg.encodeInit().  " + "Error Text: "
+                            + CodecReturnCodes.info(retVal));
+                    return ReactorCallbackReturnCodes.SUCCESS;
+                }
+
+                success = true;
+
+                if ( (retVal =  ackMsg.encodeExtendedHeaderComplete(_encodeIter, success)) < CodecReturnCodes.SUCCESS )
+                {
+                    // error condition - switch our success value to false so we can roll back
+                    success = false;
+                    System.out.println("ETA error " + CodecReturnCodes.toString(retVal) + "(" + retVal + ") encountered with encodeExtendedHeaderComplete().  "
+                            + "Error Text: " + CodecReturnCodes.info(retVal));
+                    return ReactorCallbackReturnCodes.SUCCESS;
+                }
+
+                _tunnelStreamSubmitOptions.clear();
+                _tunnelStreamSubmitOptions.containerType(DataTypes.MSG);
+                if ((ret = _tunnelStream.submit(buffer, _tunnelStreamSubmitOptions, event.errorInfo())) < ReactorReturnCodes.SUCCESS) {
+                    System.out.println("TunnelStream.submit() failed : " + CodecReturnCodes.toString(ret)
+                            + "(" + event.errorInfo().error().text() + ")");
+                    _tunnelStream.releaseBuffer(buffer, event.errorInfo());
+                    return ReactorCallbackReturnCodes.SUCCESS;
+                }
+            }
+        } else // not a login or opaque
         {
             System.out.println("TunnelStreamHandler received unsupported container type");
         }
